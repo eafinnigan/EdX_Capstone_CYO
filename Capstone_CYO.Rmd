@@ -1,0 +1,184 @@
+---
+title: "Choose Your Own Capstone"
+author: "Elizabeth"
+date: "2023-09-03"
+output:
+  pdf_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+This dataset describes loan defaults, based on 36 variables. These variables include annual income, payment failure, loan amount, interest rate, amount funded, loan term, and the next payment date, among others. The data is anonymized and identifiable information is removed.
+
+The goal of this project is to make models to predict the likelihood of someone defaulting on their loans given the loan amount and their annual income. Key steps include removing unnecessary columns and rows, removing rows containing missing values from columns used for analysis, and creating kNN and Random Forest models from the data.
+
+## Analysis
+
+```{r, include=FALSE}
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(readr)) install.packages("readr", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(readr)
+library(randomForest)
+```
+
+The necessary packages for the analysis include: tidyverse, caret, readr, and randomForest.
+
+### Cleaning Data
+
+The first thing to do is load the dataset (provided in the associated GitHub repository). For the purposes of this report, the dataset was renamed to AnonLoan, instead of Anonymize_Loan_Default_data, for easier typing. To begin cleaning the data, we take a look at the first few columns of the dataset.
+
+```{r, include=TRUE}
+urlfile<-'Anonymize_Loan_Default_data.csv'
+if(!file.exists(urlfile))
+  download.file("https://github.com/eafinnigan/EdX_Capstone_CYO/raw/main/Anonymize_Loan_Default_data.csv", urlfile)
+
+Anonymize_Loan_Default_data <- 
+  read_csv(urlfile)
+
+rm(urlfile)
+
+#rename data to a shorter name
+AnonLoan <- Anonymize_Loan_Default_data
+
+print(head(AnonLoan))
+```
+
+There is an extraneous column (originally meant as a counting column, perhaps). The first row appears to be junk data because of the December 99th value in the issue_d column. We will remove that column and row.
+
+```{r, include = TRUE}
+#remove a numbering column (shown as ...1 in the data) because it isn't needed and could confuse the model.
+#A similar column is already included in the dataset.
+AnonLoan <- AnonLoan %>% mutate(...1 = NULL)
+#Appears that the first row is junk data, (see "Dec-99" in issue_d column), so we'll remove it and look at the structure
+AnonLoan <- AnonLoan[-1,]
+str(AnonLoan)
+```
+
+From there, duplicate entries and missing values must be found and deleted from the columns used to do analysis.
+
+```{r}
+sum(duplicated(AnonLoan)) #no duplicate entries
+sum(is.na(AnonLoan)) #a lot of NAs, will check the dataset to see if they are in the columns that used to do analysis
+sum(is.na(AnonLoan$loan_amnt))
+sum(is.na(AnonLoan$annual_inc))
+sum(is.na(AnonLoan$repay_fail))
+#NAs will cause problems when doing analysis. We will remove the rows that have NAs.
+AnonLoan <- AnonLoan %>% drop_na(loan_amnt) %>% drop_na(annual_inc)
+```
+
+There are only 2 levels of the repay_fail column, so it will become a factor instead of a number.
+
+```{r}
+#there are only 2 possible outcomes with repay_fail, so we'll turn the repay_fail column from a num data type to factor.
+AnonLoan <- AnonLoan %>% mutate(repay_fail = as.factor(AnonLoan$repay_fail))
+
+#check if the mutate function worked
+str(AnonLoan$repay_fail)
+```
+
+### Training Models
+
+First is creating the test and training sets. 20% of the data will go into the test set, because it is a large dataset and any less will make the training set harder to run. Any more and the data may become overtrained.
+
+```{r}
+set.seed(29)
+test_index <- createDataPartition(y = AnonLoan$repay_fail, times = 1, p = 0.2, list = FALSE) # create a 20% test set
+test_set <- AnonLoan[test_index,]
+train_set <- AnonLoan[-test_index,]
+```
+
+The models trained will be k-Nearest Neighbors and Random Forest. k-Nearest Neighbors can handle multiple dimensions in conditional probabilities, and Random Forest can model decision making processes while still being accurate and flexible. Cross-validation is needed for both to become most accurate.
+
+#### K-Nearest Neighbor
+
+First is the k-Nearest Neighbor.
+
+```{r, include = TRUE}
+#train the model
+train_knn <- train(repay_fail~annual_inc + loan_amnt, method = "knn", data = train_set)
+#make a prediction
+y_hat_knn <- predict(train_knn, test_set, type = "raw")
+#see accuracy of model
+confusionMatrix(y_hat_knn, test_set$repay_fail)$overall[["Accuracy"]]
+```
+
+The accuracy is `r confusionMatrix(y_hat_knn, test_set$repay_fail)$overall[["Accuracy"]]` without cross-validation. To make sure that we are not overtraining and the accuracy is accurate, we will use cross-validation.
+
+```{r, include = TRUE}
+#train model with cross-validation - see if we can get the accuracy up
+set.seed(29)
+train_knn_test <- train(repay_fail~annual_inc + loan_amnt, method = "knn",
+                   data = train_set,
+                   tuneGrid = data.frame(k = seq(9, 71, 2)))
+
+#confusion matrix with best accuracy
+confusionMatrix(predict(train_knn_test, test_set, type = "raw"), test_set$repay_fail)$overall["Accuracy"]
+```
+
+With cross-validation, the accuracy is now `r confusionMatrix(predict(train_knn_test, test_set, type = "raw"), test_set$repay_fail)$overall["Accuracy"]`, which is more accurate.
+
+#### Random Forest 
+
+Next model is the Random Forest model.
+
+```{r, include = TRUE}
+set.seed(29)
+train_rf <- randomForest(repay_fail~annual_inc + loan_amnt, data=train_set)
+confusionMatrix(predict(train_rf, test_set), test_set$repay_fail)$overall["Accuracy"]
+```
+
+The accuracy is `r confusionMatrix(predict(train_rf, test_set), test_set$repay_fail)$overall["Accuracy"]` without cross-validation. Will use cross-validation to improve the accuracy and prevent overtraining.
+
+```{r, include = TRUE}
+set.seed(29)
+train_rf_test <- train(repay_fail~annual_inc + loan_amnt,
+                    method = "Rborist",
+                    tuneGrid = data.frame(predFixed = 2, minNode = c(3, 50)),
+                    data = train_set)
+#confusion matrix with best accuracy
+confusionMatrix(predict(train_rf_test, test_set), test_set$repay_fail)$overall["Accuracy"]
+```
+
+The accuracy is now `r confusionMatrix(predict(train_rf_test, test_set), test_set$repay_fail)$overall["Accuracy"]` with cross-validation, which is slightly worse than the kNN model.
+
+## Results
+
+The results of the kNN model are: 
+```{r}
+train_knn_test$finalModel
+```
+
+The results of the Random Trees model are:
+```{r}
+train_rf_test[["finalModel"]][["validation"]][["confusion"]]
+```
+
+Accuracy of kNN model: `r confusionMatrix(predict(train_rf, test_set), test_set$repay_fail)$overall["Accuracy"]` without cross validation, and `r confusionMatrix(predict(train_knn_test, test_set, type = "raw"), test_set$repay_fail)$overall["Accuracy"]` with.
+
+Accuracy of Random Trees model: `r confusionMatrix(predict(train_rf, test_set), test_set$repay_fail)$overall["Accuracy"]` without cross-validation, and `r confusionMatrix(predict(train_rf_test, test_set), test_set$repay_fail)$overall["Accuracy"]` with.
+
+Overall, the k-nearest neighbor model performed better with accuracy, although Random Trees was very close. Both models required cross-validation to increase their accuracy. If cross-validation cannot be done, then Random Trees gives a higher accuracy than kNN.
+
+## Conclusion
+
+There is a high correlation between annual income, loan amount, and whether someone managed to pay off their loans. 
+
+The potential impact of this is the ability to tell whether or not someone will default on their loans, which could give debitors the ability to make good investments with their money.
+
+The limitations of this model include the fact that not paying loans is very rare, so most predictions of loan default will be false positives, as shown by the results of the Random Trees model. 
+
+## References
+
+The dataset is from <https://www.kaggle.com/datasets/joebeachcapital/loan-default>, uploaded by Joakim Arvidsson (username joebeachcapital).
+
+Help with loading the CSV file from GitHub was done with answers from here: <https://stackoverflow.com/questions/14441729/read-a-csv-from-github-into-r>.
